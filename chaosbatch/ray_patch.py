@@ -19,8 +19,11 @@ genuine EngineDeadError, the same path a CUDA fault takes.
 """
 
 import asyncio
+import logging
 import os
 import uuid
+
+log = logging.getLogger("chaosbatch")
 
 LEDGER = "chaosbatch-ledger"
 CANARY_PROMPT = "Hi"
@@ -70,8 +73,14 @@ def install():
         """Never let the guard break the job: if the Ledger is unreachable,
         behave like stock Ray."""
         try:
+            if self._cb_ledger is None:
+                raise RuntimeError("ledger actor not found")
             return await asyncio.wait_for(getattr(self._cb_ledger, method).remote(*args), timeout=5)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            # fail-safe, but never silent: a degraded guard must be visible
+            if not getattr(self, "_cb_warned", False):
+                log.warning("chaosbatch guard DEGRADED (behaving like stock Ray): %s", e)
+                self._cb_warned = True
             return default
 
     def key_of(row):

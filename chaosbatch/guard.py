@@ -74,7 +74,10 @@ class BlameBook:
 
 def start_ledger(name="chaosbatch-ledger", **opts):
     """Start the Ledger pinned to the caller's node (the driver/head node), so
-    losing a worker node can never take the blame state with it."""
+    losing a worker node can never take the blame state with it.
+
+    KEEP THE RETURNED HANDLE for the life of the job: Ray garbage-collects a
+    non-detached actor as soon as no handle refers to it."""
     here = ray.get_runtime_context().get_node_id()
     return Ledger.options(name=name, get_if_exists=True,
                           scheduling_strategy=NodeAffinitySchedulingStrategy(here, soft=False),

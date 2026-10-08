@@ -26,13 +26,15 @@ def main():
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                             env={**os.environ, "CB_EVENTS": ev})
     print(f"{BOLD}ray batch job · 2,000 rows · 3 vLLM engines · {'guard ON' if a.guard else 'stock Ray 2.59'}{OFF}")
-    seen, deaths, t0 = 0, 0, time.time()
+    seen, deaths, t0 = 0, 0, None  # clock starts when the first engine starts, like the job's own timer
     while proc.poll() is None:
         if os.path.exists(ev):
             lines = open(ev).read().splitlines()
             for l in lines[seen:]:
                 e = json.loads(l)
-                t = time.time() - t0
+                if t0 is None:
+                    t0 = e["t"]
+                t = e["t"] - t0
                 if e["kind"] == "engine_dead":
                     deaths += 1
                     what = "canary" if e.get("row") == -1 and "canary" in e.get("err", "") else (

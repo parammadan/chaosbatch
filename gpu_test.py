@@ -38,7 +38,7 @@ def main():
     ray.init(runtime_env=runtime_env)
     if args.mode == "guard":
         from chaosbatch.guard import start_ledger
-        start_ledger()
+        ledger = start_ledger()  # keep the handle, or Ray garbage-collects the actor
 
     rows = [{"id": i, "prompt": (MARKER + " " if i == POISON_ID else "") + f"In one word, what color is fruit number {i}?"}
             for i in range(N)]
@@ -63,7 +63,7 @@ def main():
         if out is not None:
             ids = [r["id"] for r in out]
             res.update(rows=len(out), unique=len(set(ids)), missing=N - len(set(ids)),
-                       error_rows=[r["id"] for r in out if r["err"]],
+                       error_rows=[r["id"] for r in out if r.get("err") or r.get("__inference_error__")],
                        sample=[r["out"] for r in out[:3]])
         print("RESULT " + json.dumps(res), flush=True)
 
