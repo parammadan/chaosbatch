@@ -57,7 +57,7 @@ def main():
     cluster.wait_for_nodes()
     ray.init(address=cluster.address, log_to_driver=False)
 
-    events = tempfile.mktemp(suffix=".jsonl")
+    events = os.environ.get("CB_EVENTS") or tempfile.mktemp(suffix=".jsonl")
     faults = FaultSpec(events_path=events)
     if args.fault == "transient":
         faults.transient_p = 0.05

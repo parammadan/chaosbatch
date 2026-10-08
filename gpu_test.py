@@ -48,7 +48,8 @@ def main():
         runtime_env=runtime_env)
     proc = build_processor(
         cfg,
-        preprocess=lambda r: dict(id=r["id"], prompt=r["prompt"],
+        # Ray 2.59 applies the model's chat template by default, so rows go in as chat messages
+        preprocess=lambda r: dict(id=r["id"], messages=[{"role": "user", "content": r["prompt"]}],
                                   sampling_params=dict(max_tokens=8, temperature=0)),
         postprocess=lambda r: dict(id=r["id"], out=r.get("generated_text", ""),
                                    err=r.get("__inference_error__", "")))

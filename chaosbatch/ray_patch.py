@@ -94,7 +94,8 @@ def install():
                 raise                       # Ray's handler then exits the actor
 
         self.llm.generate_async = reporting_generate
-        canary = {k: v for k, v in template_row.items() if k != "id"}
+        # the engine prefers pre-tokenized fields over the prompt text, so drop them too
+        canary = {k: v for k, v in template_row.items() if k != "id" and "token" not in k and k != "messages"}
         canary["prompt"] = CANARY_PROMPT
         try:
             await raw_generate(canary)
