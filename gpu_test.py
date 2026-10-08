@@ -1,5 +1,5 @@
 """Real Ray Data LLM + vLLM on GPUs: does one poison prompt hang the job, and
-does the ChaosBatch guard fix it?  Run on a node with 2 GPUs.
+does the ChaosBatch guard fix it?  Runs on 1 GPU (Explorer allows one per job).
 
     python gpu_test.py --mode baseline|stock|guard --deadline 900
 """
@@ -43,7 +43,7 @@ def main():
     rows = [{"id": i, "prompt": (MARKER + " " if i == POISON_ID else "") + f"In one word, what color is fruit number {i}?"}
             for i in range(N)]
     cfg = vLLMEngineProcessorConfig(
-        model_source=args.model, concurrency=2, batch_size=16, should_continue_on_error=True,
+        model_source=args.model, concurrency=1, batch_size=16, should_continue_on_error=True,
         engine_kwargs={"max_model_len": 1024, "enforce_eager": True, "gpu_memory_utilization": 0.7},
         runtime_env=runtime_env)
     proc = build_llm_processor(
