@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChaosBatch</title>
+<meta name="description" content="One bad row can hang a Ray batch-LLM job forever. Reproduced, measured, and fixed.">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --code: #f0efec;
+  --s1: #2a78d6; --s2: #eb6834; --good: #0ca30c; --bad: #d03b3b; --good-bg: #e8f5e8; --bad-bg: #fbe9e9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --code: #262624;
+    --s1: #3987e5; --s2: #d95926; --good-bg: #13301a; --bad-bg: #3a1717;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --code: #262624;
+  --s1: #3987e5; --s2: #d95926; --good-bg: #13301a; --bad-bg: #3a1717;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 900px; margin: 0 auto; padding: 48px 16px 96px; }
+h1 { font-size: 40px; line-height: 1.1; margin: 0 0 8px; letter-spacing: -0.02em; }
+h2 { font-size: 24px; margin: 56px 0 8px; }
+p, li { color: var(--ink-2); }
+p strong, li strong { color: var(--ink); }
+.lede { font-size: 19px; }
+code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+a { color: var(--s1); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 28px 0 8px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 16px 18px; }
+.tile .v { font-size: 32px; font-weight: 650; letter-spacing: -0.02em; }
+.tile .l { color: var(--ink-2); font-size: 14px; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 20px; margin: 16px 0; position: relative; overflow-x: auto; }
+.card h3 { margin: 0 0 4px; font-size: 16px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+td.ok { background: var(--good-bg); }
+td.hung { background: var(--bad-bg); font-weight: 600; color: var(--ink); }
+.ico { font-weight: 700; margin-right: 4px; }
+td.ok .ico { color: var(--good); } td.hung .ico { color: var(--bad); }
+.small { font-size: 12px; color: var(--muted); }
+svg { display: block; width: 100%; height: auto; }
+svg text { fill: var(--muted); font-size: 12px; font-family: inherit; }
+svg .lbl { fill: var(--ink-2); }
+.legend { display: flex; gap: 16px; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+.theme { position: fixed; top: 12px; right: 12px; background: var(--surface); color: var(--ink-2); border: 1px solid var(--ring); border-radius: 8px; padding: 4px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+footer { margin-top: 64px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<button class="theme" id="theme" aria-label="Toggle dark mode">Theme</button>
+<main>
+  <h1>ChaosBatch</h1>
+  <p class="lede">One bad row can hang a Ray batch-LLM job forever. When a single request crashes the vLLM engine, Ray restarts the engine and retries the same row again and again, even with <code>should_continue_on_error</code> on. I reproduced it, measured it across the configurations users are told to try, and built a small guard that fixes it without forking Ray.</p>
+  <p><a href="https://github.com/parammadan/chaosbatch">Code &amp; data</a> · issues: <a href="https://github.com/ray-project/ray/issues/59522">#59522</a>, <a href="https://github.com/ray-project/ray/issues/65862">#65862</a></p>
+  <div class="tiles" id="tiles"></div>
+
+  <h2>Why it hangs</h2>
+  <p>Ray Data LLM runs vLLM engines as a pool of actors. Ray 2.59 handles a dead engine (<code>EngineDeadError</code>) by exiting the actor with <code>os._exit(1)</code> so it restarts, then retrying the batch. That cures one-off CUDA errors. But that fatal path runs <strong>before</strong> <code>should_continue_on_error</code> is checked, so a row that kills the engine every time is retried forever and the job never finishes.</p>
+
+  <h2>The survival matrix</h2>
+  <div class="card">
+    <h3>Every config × every fault, stock vs guarded</h3>
+    <p class="sub">Ray 2.59, simulated engine on a local multi-node cluster, 2,000 rows. "Hung" = not finished after 120 s.</p>
+    <table id="matrix"></table>
+  </div>
+
+  <h2>A broken GPU: the job survives, but at a cost</h2>
+  <p>My first guess was that a bad GPU kills the job. It doesn't: healthy engines absorb the work. But on stock Ray the broken GPU crash-loops for the rest of the job, and every crash throws away the batches in flight. The guard detects it with a <strong>canary</strong> (a harmless warm-up request every fresh engine must answer) and <strong>fences</strong> the GPU after 2 canary deaths by reserving its slot.</p>
+  <div class="card" id="c-gpu">
+    <h3>Engine deaths on the broken GPU, 20,000-row job, packed cluster</h3>
+    <p class="sub">Two runs each. On real hardware every death also reloads the model weights.</p>
+    <div class="legend"><span><i style="background:var(--s2)"></i>Stock Ray</span><span><i style="background:var(--s1)"></i>With guard</span></div>
+    <div id="gpu"></div>
+  </div>
+
+  <h2>How the guard assigns blame</h2>
+  <p>When an engine dies, every in-flight request fails with it, so the error alone can't say whether a row or the device is at fault. Two cheap experiments settle it:</p>
+  <ul>
+    <li><strong>Canary.</strong> If the warm-up request kills a fresh engine, no real row was involved, so the device is at fault and gets fenced.</li>
+    <li><strong>Isolate.</strong> Rows in flight during a death become suspects and are re-run one at a time. A row that is alone in flight for 2 deaths is the poison: it's written out as an error row and the job carries on.</li>
+  </ul>
+  <p>Blame state lives in a Ledger actor pinned to the head node. If the guard can't reach it, it behaves exactly like stock Ray, so a safety layer can't become the thing that breaks the job.</p>
+  <div id="gpu-real"></div>
+
+  <h2>Mistakes caught along the way</h2>
+  <ul>
+    <li>I first guessed a bad GPU kills the job. It doesn't, so the GPU fence is measured against wasted restarts, not crashes.</li>
+    <li>The guarded engine skipped transient-fault injection at first, which made it look better than it was. Fixed, and the matrix re-run.</li>
+    <li>A node-loss test removed the node after the job had already finished. The timing was fixed.</li>
+    <li>The guard caused one failure stock Ray didn't have: its Ledger was on the removed node. It's now pinned to the head node and every call is fail-safe, and 9 of 9 repeat runs passed.</li>
+  </ul>
+
+  <footer>Param Madan · measured October 2026 on Ray 2.59 · <a href="https://github.com/parammadan/chaosbatch">github.com/parammadan/chaosbatch</a></footer>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const NAMES = { none: "No fault", transient: "Transient crash", poison: "Poison row", bad_gpu: "Bad GPU (spare node)", bad_gpu_full: "Bad GPU (packed)", node_loss: "Node loss" };
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+function cell(r) {
+  if (r.outcome !== "completed") return `<td class="hung"><span class="ico">✕</span>Hung<div class="small">${r.engine_deaths} engine deaths in ${r.secs}s</div></td>`;
+  const er = r.error_rows ? `, ${r.error_rows} error row` : "";
+  return `<td class="ok"><span class="ico">✓</span>Completed<div class="small">${r.unique} rows${er} · ${r.engine_deaths} death${r.engine_deaths === 1 ? "" : "s"}</div></td>`;
+}
+function matrix(d) {
+  const g = {}; d.guard.forEach(r => g[[r.config, r.fault, r.continue_on_error]] = r);
+  $("#matrix").innerHTML = `<tr><th>Config</th><th>Fault</th><th>Stock Ray 2.59</th><th>With guard</th></tr>` +
+    d.stock.map(r => `<tr><td>${r.config}</td><td>${NAMES[r.fault]}${r.fault === "poison" ? (r.continue_on_error ? "<div class='small'>continue_on_error = on</div>" : "<div class='small'>continue_on_error = off</div>") : ""}</td>${cell(r)}${cell(g[[r.config, r.fault, r.continue_on_error]])}</tr>`).join("");
+}
+function tiles(d) {
+  const hung = d.stock.filter(r => r.fault === "poison" && r.outcome !== "completed").length;
+  const poison = d.stock.filter(r => r.fault === "poison").length;
+  const fixed = d.guard.filter(r => r.fault === "poison" && r.outcome === "completed").length;
+  const ok = d.guard.filter(r => r.outcome === "completed").length;
+  $("#tiles").innerHTML = [
+    [`${hung} / ${poison}`, "poison-row runs that hung on stock Ray, in every config"],
+    [`${fixed} / ${poison}`, "completed with the guard: all rows, exactly 1 error row"],
+    [`${ok} / ${d.guard.length}`, "guarded runs completed across all faults (nothing broken)"],
+  ].map(([v, l]) => `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+}
+function gpu(d) {
+  const runs = d.bad_gpu_long, W = 800, row = 40, m = { l: 150, r: 70, t: 8, b: 28 }, H = m.t + m.b + row * runs.length;
+  const max = Math.max(...runs.map(r => r.deaths_on_bad_node)) * 1.15, x = v => m.l + v / max * (W - m.l - m.r);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Engine deaths on broken GPU: stock vs guard">`;
+  runs.forEach((r, i) => {
+    const y = m.t + row * i + 8, col = r.guard ? css("--s1") : css("--s2");
+    s += `<text x="${m.l - 12}" y="${y + 16}" text-anchor="end" class="lbl">${r.guard ? "With guard" : "Stock Ray"} · run ${i % 2 + 1}</text>`;
+    s += `<rect x="${m.l}" y="${y}" width="${x(r.deaths_on_bad_node) - m.l}" height="22" rx="4" fill="${col}"/>`;
+    s += `<text x="${x(r.deaths_on_bad_node) + 8}" y="${y + 16}" class="lbl">${r.deaths_on_bad_node} deaths · ${r.secs}s</text>`;
+  });
+  $("#gpu").innerHTML = s + `</svg>`;
+}
+function real(d) {
+  if (!d.gpu) return;
+  $("#gpu-real").innerHTML = `<h2>Confirmed on real GPUs</h2><div class="card"><table><tr><th>Run</th><th>Outcome</th><th>Rows</th><th>Engine kills</th><th>Time</th></tr>` +
+    d.gpu.map(r => `<tr><td>${r.mode}</td><td>${r.outcome}</td><td>${r.unique ?? "—"}${r.error_rows && r.error_rows.length ? ` (${r.error_rows.length} error row)` : ""}</td><td>${r.engine_kills}</td><td>${r.secs}s</td></tr>`).join("") + `</table></div>`;
+}
+let DATA;
+function render() { tiles(DATA); matrix(DATA); gpu(DATA); real(DATA); }
+fetch("data.json").then(r => r.json()).then(d => { DATA = d; render(); });
+const root = document.documentElement;
+try { const t = localStorage.getItem("cb-theme"); if (t) root.dataset.theme = t; } catch (e) {}
+$("#theme").addEventListener("click", () => {
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("cb-theme", root.dataset.theme); } catch (e) {}
+  if (DATA) render();
+});
+</script>
+</body>
+</html>
