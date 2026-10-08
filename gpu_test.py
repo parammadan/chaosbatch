@@ -11,7 +11,7 @@ import threading
 import time
 
 import ray
-from ray.data.llm import build_llm_processor, vLLMEngineProcessorConfig
+from ray.data.llm import build_processor, vLLMEngineProcessorConfig
 
 MARKER = "__CHAOS_POISON__"
 N, POISON_ID = 400, 137
@@ -46,7 +46,7 @@ def main():
         model_source=args.model, concurrency=1, batch_size=16, should_continue_on_error=True,
         engine_kwargs={"max_model_len": 1024, "enforce_eager": True, "gpu_memory_utilization": 0.7},
         runtime_env=runtime_env)
-    proc = build_llm_processor(
+    proc = build_processor(
         cfg,
         preprocess=lambda r: dict(id=r["id"], prompt=r["prompt"],
                                   sampling_params=dict(max_tokens=8, temperature=0)),
