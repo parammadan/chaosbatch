@@ -127,6 +127,7 @@ class GuardedEngineStage(FakeEngineStage):
             self.inflight.discard(row_id)
 
     async def __call__(self, batch):
+        self.maybe_transient_crash()  # same fault injection as the stock stage
         st = await self.ledger.state.remote()
         quarantined, suspects = set(st["quarantined"]), set(st["suspects"])
         ids = [int(i) for i in batch["id"]]

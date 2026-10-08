@@ -65,7 +65,7 @@ def main():
     elif args.fault in ("bad_gpu", "bad_gpu_full"):
         faults.bad_nodes = [workers[0].node_id]
     if args.fault == "node_loss":
-        threading.Timer(4.0, lambda: cluster.remove_node(workers[1], allow_graceful=False)).start()
+        threading.Timer(1.5, lambda: cluster.remove_node(workers[1], allow_graceful=False)).start()
 
     cfg = CONFIGS[args.config]
     ctx = ray.data.DataContext.get_current()

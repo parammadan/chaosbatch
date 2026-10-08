@@ -87,9 +87,13 @@ class FakeEngineStage:
                 raise
             return {"id": row_id, "output": "", "__inference_error__": f"{type(e).__name__}: {e}"}
 
-    async def __call__(self, batch):
+    def maybe_transient_crash(self):
+        """A random CUDA error: kills the engine once, not tied to any row or device."""
         if self.f.transient_p and random.random() < self.f.transient_p:
             log_event(self.f.events_path, kind="engine_dead", node=self.node, row=-1, err="transient")
             os._exit(1)
+
+    async def __call__(self, batch):
+        self.maybe_transient_crash()
         outs = await asyncio.gather(*(self._one(int(i)) for i in batch["id"]))
         return {k: [o[k] for o in outs] for k in ("id", "output", "__inference_error__")}
