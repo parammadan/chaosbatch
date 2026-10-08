@@ -72,6 +72,15 @@ class BlameBook:
         return False
 
 
+def start_ledger(name="chaosbatch-ledger", **opts):
+    """Start the Ledger pinned to the caller's node (the driver/head node), so
+    losing a worker node can never take the blame state with it."""
+    here = ray.get_runtime_context().get_node_id()
+    return Ledger.options(name=name, get_if_exists=True,
+                          scheduling_strategy=NodeAffinitySchedulingStrategy(here, soft=False),
+                          **opts).remote()
+
+
 @ray.remote(num_cpus=0)
 class Ledger:
     """Named actor on the head node: blame state that survives engine restarts."""
@@ -99,19 +108,33 @@ class Ledger:
 class GuardedEngineStage(FakeEngineStage):
     def __init__(self, faults, should_continue_on_error=False, ledger_name="chaosbatch-ledger"):
         super().__init__(faults, should_continue_on_error)
-        self.ledger = ray.get_actor(ledger_name)
+        try:
+            self.ledger = ray.get_actor(ledger_name)
+        except ValueError:
+            self.ledger = None
         self.inflight = set()
         self.alone = asyncio.Lock()
         try:  # canary: a harmless request no real row depends on
             self.generate_sync(CANARY_ID)
         except FakeEngineDeadError:
-            fenced = ray.get(self.ledger.report_canary_death.remote(self.node))
+            try:
+                fenced = ray.get(self.ledger.report_canary_death.remote(self.node), timeout=5)
+            except Exception:  # noqa: BLE001
+                fenced = False
             log_event(self.f.events_path, kind="engine_dead", node=self.node, row=CANARY_ID,
                       err=f"canary (fenced={fenced})")
             os._exit(1)
 
+    async def _ledger(self, method, *args, default=None):
+        """Ledger call that can't break the job: if the Ledger is unreachable,
+        behave exactly like stock Ray (no suspects, no quarantine)."""
+        try:
+            return await asyncio.wait_for(getattr(self.ledger, method).remote(*args), timeout=5)
+        except Exception:  # noqa: BLE001
+            return default
+
     async def _die(self, rows):
-        await self.ledger.report_death.remote(self.node, sorted(rows))
+        await self._ledger("report_death", self.node, sorted(rows))
         log_event(self.f.events_path, kind="engine_dead", node=self.node, row=int(sorted(rows)[0]) if rows else -2,
                   err=f"{len(rows)} in flight")
         os._exit(1)
@@ -128,7 +151,7 @@ class GuardedEngineStage(FakeEngineStage):
 
     async def __call__(self, batch):
         self.maybe_transient_crash()  # same fault injection as the stock stage
-        st = await self.ledger.state.remote()
+        st = await self._ledger("state", default={"suspects": [], "quarantined": []})
         quarantined, suspects = set(st["quarantined"]), set(st["suspects"])
         ids = [int(i) for i in batch["id"]]
         outs = {}

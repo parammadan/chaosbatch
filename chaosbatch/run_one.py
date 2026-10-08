@@ -45,6 +45,7 @@ def main():
                     choices=["none", "transient", "poison", "bad_gpu", "bad_gpu_full", "node_loss"])
     ap.add_argument("--continue-on-error", action="store_true")
     ap.add_argument("--guard", action="store_true", help="use the ChaosBatch guard")
+    ap.add_argument("--rows", type=int, default=ROWS)
     ap.add_argument("--deadline", type=float, default=120,
                     help="seconds before the run is declared hung (events are still reported)")
     args = ap.parse_args()
@@ -75,8 +76,8 @@ def main():
     stage = FakeEngineStage
     kwargs = dict(faults=faults.to_dict(), should_continue_on_error=args.continue_on_error)
     if args.guard:
-        from chaosbatch.guard import GuardedEngineStage, Ledger
-        ledger = Ledger.options(name="chaosbatch-ledger", get_if_exists=True).remote()
+        from chaosbatch.guard import GuardedEngineStage, start_ledger
+        ledger = start_ledger()
         stage, kwargs = GuardedEngineStage, dict(kwargs, ledger_name="chaosbatch-ledger")
 
     t0 = time.time()
@@ -91,7 +92,7 @@ def main():
                "deaths_on_bad_node": sum(e["kind"] == "engine_dead" and e["node"] in faults.bad_nodes for e in ev)}
         if out is not None:
             ids = Counter(r["id"] for r in out)
-            res.update(rows_out=len(out), unique=len(ids), missing=ROWS - len(ids),
+            res.update(rows_out=len(out), unique=len(ids), missing=args.rows - len(ids),
                        duplicates=sum(c - 1 for c in ids.values() if c > 1),
                        error_rows=sum(1 for r in out if r["__inference_error__"]))
         if args.guard:
@@ -106,7 +107,7 @@ def main():
         os._exit(0)
     threading.Timer(args.deadline, on_deadline).start()
     try:
-        ds = ray.data.range(ROWS, override_num_blocks=40).map_batches(
+        ds = ray.data.range(args.rows, override_num_blocks=max(40, args.rows // 50)).map_batches(
             stage,
             fn_constructor_kwargs=kwargs,
             batch_size=50,
