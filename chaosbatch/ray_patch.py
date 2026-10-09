@@ -141,10 +141,14 @@ def install():
             if k in quarantined:
                 yield quarantined_row(self, row, batch_uuid)
             elif k in suspects:
+                # Run the suspect alone, but never yield while holding the lock: Ray may
+                # finalize this async generator from another task, and releasing the lock
+                # there raises "release unlocked lock" (seen on A100, 2026-10-08).
                 async with self._cb_alone:           # nothing else in flight on this engine
                     while self._cb_inflight:
                         await asyncio.sleep(0.01)
-                    yield await run_row(self, row, batch_uuid)
+                    result = await run_row(self, row, batch_uuid)
+                yield result
             else:
                 normal.append(row)
         async with self._cb_alone:                   # don't overlap a running suspect
