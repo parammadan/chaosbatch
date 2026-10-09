@@ -38,11 +38,36 @@ Full 21-cell matrix: `python report.py`. Raw runs are in `results/`.
 On real GPUs every restart also reloads the model weights, so a crash loop that costs
 seconds here costs minutes per iteration in production.
 
-### Real vLLM on GPUs
+### Real vLLM on a GPU (NVIDIA A100, NU Explorer)
 
-*Pending:* the same poison test with Ray Data LLM + real vLLM (Qwen2.5-0.5B, 2 GPUs).
-The poison kills vLLM's own EngineCore process, so vLLM raises a genuine `EngineDeadError`.
-See `gpu_test.py`.
+Ray 2.59.0 + vLLM 0.27.0 + Qwen2.5-0.5B-Instruct. Explorer's A100 driver is CUDA 12.8 and vLLM 0.27
+ships CUDA 13 builds only, so the runs use NVIDIA's CUDA forward-compatibility library.
+
+| Run | Outcome |
+|---|---|
+| Clean job, no fault | **completed**: 400/400 rows in 148 s (real answers: "Green.", "Red.", …) |
+| One poison prompt, stock Ray | **hung**: 2 engine restarts in the 4-minute cap; each restart reloads the model (~2 min) |
+| Guard, first GPU run | **hung**: exposed a bug in my guard (below) |
+
+The poison is real: a test-only hook kills vLLM's own EngineCore process when it sees a marker
+prompt, so vLLM raises a genuine `EngineDeadError` and Ray's own handler takes it from there.
+
+**The guard has not yet been confirmed on a real GPU.** It is verified on Ray's real code path
+with only the engine stubbed (`chaosbatch/cpu_harness.py`, below). Further GPU runs were stopped
+because this stack (Ray startup, the data pipeline, and vLLM initialization) leaves the GPU idle
+for minutes before any work, which triggered the cluster's idle-GPU warnings.
+
+### Ray's real code path, engine stubbed (CPU harness)
+
+`cpu_test.py` runs the real `ray.data.llm` pipeline, the real `vLLMEngineStageUDF` and the real
+guard patch, with a fake engine that raises `EngineDeadError` on the poison and stays dead, like a
+killed EngineCore. Ray gets one logical GPU so the stage schedules on a laptop.
+
+| Mode | Outcome |
+|---|---|
+| baseline | completed: 300/300 rows |
+| stock | **hung**: 10–17 engine kills in 90 s |
+| guard | **completed**: 300/300 rows, row 137 returned as an error row, 4 engine kills, ledger quarantined "137" |
 
 ## The guard
 
@@ -79,11 +104,21 @@ Two implementations:
 - The guard itself caused one failure stock Ray didn't have: its Ledger landed on the node that
   was removed. The Ledger is now pinned to the head node and every call is fail-safe. Then 9 of 9
   repeat runs passed under node loss.
+- **The fail-safe hid a bug.** On the first GPU run the guard hung. The CPU harness showed why: the
+  test scripts never kept a handle to the Ledger actor, so Ray garbage-collected it immediately, and
+  the fail-safe quietly fell back to stock behaviour. The simulator kept the handle, which is why it
+  passed there. The fail-safe now logs `chaosbatch guard DEGRADED` instead of failing silently.
+- **Yield under a lock.** The second GPU run failed with `RuntimeError: release unlocked lock`: the
+  guard yielded from Ray's async-generator UDF while holding an asyncio lock, and Ray finalized the
+  generator from another task. It now computes inside the lock and yields after releasing it.
+- **Error rows skip postprocess.** My test reported no error rows although the poison was labelled
+  correctly: Ray deliberately passes error rows through without running the user's postprocess.
 
 ## What this is not
 
 - The matrix uses a simulated engine. The failure semantics (actor exit, restart, task retry,
   Ray Data's pool) are real Ray 2.59, but the model is a sleep.
+- The guard is verified on Ray's real code path with a stubbed engine, not yet on a real GPU.
 - Anyscale's GPU Health Observability (private preview) targets hardware faults through DCGM
   telemetry. The canary is a behavioral signal and would complement it, not replace it.
 - 2 runs per long bad-GPU configuration: treat the speedup as indicative.
