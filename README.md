@@ -1,5 +1,7 @@
 # ChaosBatch
 
+▶ **Walkthrough video (3.5 min):** [https://youtu.be/pjW7D6AzjsU](https://youtu.be/pjW7D6AzjsU) · **Results:** [parammadan.github.io/chaosbatch](https://parammadan.github.io/chaosbatch/)
+
 **One bad row can hang a Ray batch-LLM job forever.** ChaosBatch reproduces that, measures it
 across the configurations Ray users are told to try, and ships a small guard that fixes it
 without forking Ray.
