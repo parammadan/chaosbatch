@@ -145,7 +145,7 @@ function gpu(d) {
 }
 function real(d) {
   if (!d.gpu) return;
-  $("#gpu-real").innerHTML = `<h2>Confirmed on real GPUs</h2><div class="card"><table><tr><th>Run</th><th>Outcome</th><th>Rows</th><th>Engine kills</th><th>Time</th></tr>` +
+  $("#gpu-real").innerHTML = `<h2>The bug on a real GPU</h2><p>NVIDIA A100 · Ray 2.59.0 · vLLM 0.27.0 · Qwen2.5-0.5B. The poison kills vLLM's own engine process, so vLLM raises a genuine <code>EngineDeadError</code>. The guard is verified on Ray's real code path with a stubbed engine, not yet on a GPU.</p><div class="card"><table><tr><th>Run</th><th>Outcome</th><th>Rows</th><th>Engine kills</th><th>Time</th></tr>` +
     d.gpu.map(r => `<tr><td>${r.mode}</td><td>${r.outcome}</td><td>${r.unique ?? "—"}${r.error_rows && r.error_rows.length ? ` (${r.error_rows.length} error row)` : ""}</td><td>${r.engine_kills}</td><td>${r.secs}s</td></tr>`).join("") + `</table></div>`;
 }
 let DATA;

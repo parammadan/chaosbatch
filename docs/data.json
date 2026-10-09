@@ -945,5 +945,30 @@
     }
    }
   }
+ ],
+ "gpu": [
+  {
+   "mode": "baseline",
+   "outcome": "completed",
+   "secs": 148.0,
+   "engine_kills": 0,
+   "error": null,
+   "rows": 400,
+   "unique": 400,
+   "missing": 0,
+   "error_rows": [],
+   "sample": [
+    "Green.",
+    "Red.",
+    "Red."
+   ]
+  },
+  {
+   "mode": "stock",
+   "outcome": "hung",
+   "secs": 240.0,
+   "engine_kills": 2,
+   "error": null
+  }
  ]
 }

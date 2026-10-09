@@ -36,9 +36,10 @@ def main():
                      f"| {cell(r)} | {cell(g[key(r)])} |")
     long_runs = [json.loads(l) for l in (R / "badgpu_long.jsonl").read_text().splitlines()]
     data = {"stock": stock, "guard": guard, "bad_gpu_long": long_runs}
-    gpu = sorted(R.glob("gpu-*.json"))
-    if gpu:
-        data["gpu"] = [json.loads(p.read_text()) for p in gpu]
+    log = R / "gpu" / "gpu5.10929447.log"   # real A100 run: baseline + stock (guard run 1 hit a since-fixed bug)
+    if log.exists():
+        rows = [json.loads(l[7:]) for l in log.read_text().splitlines() if l.startswith("RESULT ")]
+        data["gpu"] = [r for r in rows if r["mode"] in ("baseline", "stock")]
     Path("docs").mkdir(exist_ok=True)
     Path("docs/data.json").write_text(json.dumps(data, indent=1))
     print("\n".join(lines))
